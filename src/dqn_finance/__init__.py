@@ -9,6 +9,7 @@ from .agent import (
 )
 from .environment import MarketEnvironment
 from .memory import ReplayMemory
+from .data_generation import GBMGARCHParams, generate_mock_ohlcv
 
 __all__ = [
     "AgentConfig",
@@ -18,5 +19,7 @@ __all__ = [
     "ReplayMemory",
     "build_default_action_space",
     "create_agent",
+    "GBMGARCHParams",
+    "generate_mock_ohlcv",
 ]
 
