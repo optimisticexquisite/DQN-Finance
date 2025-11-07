@@ -1,6 +1,7 @@
 """DQN agent tailored for financial trading tasks."""
 
 from __future__ import annotations
+from tqdm import tqdm
 
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -187,7 +188,7 @@ class DQNAgent:
         """Train the agent for a number of epochs over the environment."""
 
         metrics: List[Dict[str, float]] = []
-        for _ in range(epochs):
+        for _ in tqdm(range(epochs)):
             metrics.append(self.train_epoch(environment))
         return metrics
 

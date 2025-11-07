@@ -1,7 +1,5 @@
 """Neural network components for DQN trading agents."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence
 

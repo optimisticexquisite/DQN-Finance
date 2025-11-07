@@ -9,7 +9,7 @@ from .agent import (
 )
 from .environment import MarketEnvironment
 from .memory import ReplayMemory
-from .data_generation import GBMGARCHParams, generate_mock_ohlcv
+from .data_generation import GBMGARCHParams, generate_mock_ohlcv, GBMParams
 
 __all__ = [
     "AgentConfig",
@@ -20,6 +20,7 @@ __all__ = [
     "build_default_action_space",
     "create_agent",
     "GBMGARCHParams",
+    "GBMParams",
     "generate_mock_ohlcv",
 ]
 

@@ -77,12 +77,30 @@ def plot_candlestick(
 ) -> None:
     df = pd.read_csv(csv_path)
 
-    missing = REQUIRED_COLUMNS - set(df.columns.str.lower())
-    if missing:
-        raise ValueError(f"CSV file must contain columns: {', '.join(sorted(REQUIRED_COLUMNS))}")
+    # === PATCH for NIFTY50 CSV format ===
+    df.columns = [col.strip().replace('.', '').replace('%', '').lower() for col in df.columns]
+    rename_map = {
+        "price": "close",
+        "vol": "volume",
+        "date": "timestamp"
+    }
+    df = df.rename(columns=rename_map)
 
-    # Normalize column names in case they differ by case.
-    df = df.rename(columns=str.lower)
+    # Clean numeric columns
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(",", "", regex=False)
+                .str.replace("M", "e6", regex=False)
+                .str.replace("%", "", regex=False)
+            )
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    if "timestamp" in df.columns:
+        df["timestamp"] = pd.to_datetime(df["timestamp"], format="%d-%m-%Y", errors="coerce")
+
 
     timestamps = _infer_timestamps(df, start=start, freq=freq)
     df = df.assign(timestamp=timestamps)
@@ -95,18 +113,26 @@ def plot_candlestick(
         raise ValueError("Timestamp column contains invalid values that cannot be parsed")
     dates = mdates.date2num(timestamp_series.dt.to_pydatetime())
 
-    fig, (ax_price, ax_volume) = plt.subplots(2, 1, sharex=True, figsize=(12, 6), gridspec_kw={"height_ratios": [3, 1]})
+    fig, (ax_price, ax_volume) = plt.subplots(2, 1, sharex=True, figsize=(6, 6), gridspec_kw={"height_ratios": [3, 1]})
 
     _candlestick(ax_price, dates, df["open"].to_numpy(), df["high"].to_numpy(), df["low"].to_numpy(), df["close"].to_numpy())
     _plot_volume(ax_volume, dates, df["volume"].to_numpy(), df["close"].to_numpy(), df["open"].to_numpy())
 
     ax_price.set_title("Candlestick Chart")
-    fig.autofmt_xdate()
+    ax_volume.set_title("Vol vs year")
+
+    # === PATCH: Improve x-axis readability for long time series ===
+    ax_price.xaxis.set_major_locator(mdates.YearLocator())        # tick every year
+    ax_price.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))  # show only the year
+    fig.autofmt_xdate(rotation=45)
+
+    fig.set_size_inches(20, 8)   # Wider figure to fit 20 years of data
+    plt.rcParams['figure.dpi'] = 200  # Higher resolution
     plt.tight_layout()
 
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output, dpi=200)
+        fig.savefig(output, dpi = 600)
     else:
         plt.show()
 
@@ -115,11 +141,11 @@ def plot_candlestick(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("csv_path", type=Path, nargs="?", default=Path("data/mock_ohlcv.csv"), help="Path to the OHLCV CSV file")
+    parser.add_argument("--csv_path", type=Path, nargs="?", default=Path("data/Nifty_50.csv"), help="Path to the OHLCV CSV file")
     parser.add_argument("--output", type=Path, help="Optional path to save the chart instead of displaying it")
     parser.add_argument("--start", type=str, default="2000-01-01", help="Fallback start timestamp when CSV lacks datetime column")
     parser.add_argument("--freq", type=str, default="15T", help="Sampling frequency used to rebuild timestamps when absent")
-    parser.add_argument("--limit", type=int, default=200, help="Number of most recent candles to plot (use <=0 for all)")
+    parser.add_argument("--limit", type=int, default = 500, help="Number of most recent candles to plot (use <=0 for all)")
     return parser.parse_args()
 
 

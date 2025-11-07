@@ -21,12 +21,17 @@ DataFrameLike = Union[ArrayLike, "pd.DataFrame"]
 class GBMGARCHParams:
     """Parameter bundle for GBM price dynamics with GARCH(1,1) volatility."""
 
-    drift: float = 0.05
+    drift: float = 0.05 # mu of the GBM
     omega: float = 1e-6
     alpha: float = 0.05
     beta: float = 0.9
     initial_volatility: float = 0.02
-
+    
+@dataclass(frozen=True)
+class GBMParams:
+    """Parameter bundle for simple GBM (constant volatility)."""
+    drift: float = 0.05       # expected return μ
+    volatility: float = 0.2   # constant volatility σ
 
 def _simulate_garch_volatility(
     n_steps: int,
@@ -141,18 +146,30 @@ def generate_mock_ohlcv(
         raise ValueError("base_volume must be positive")
 
     rng = np.random.default_rng(seed)
-    cfg = params or GBMGARCHParams()
 
-    volatilities = _simulate_garch_volatility(
-        n_periods,
-        omega=cfg.omega,
-        alpha=cfg.alpha,
-        beta=cfg.beta,
-        initial_volatility=cfg.initial_volatility,
-        rng=rng,
-    )
+    # cfg = params or GBMGARCHParams()  #Control for random volatilities
+    cfg = params or GBMParams()
 
-    prices = _generate_price_path(start_price, cfg.drift, dt, volatilities, rng)
+    # volatilities = _simulate_garch_volatility(
+    #     n_periods,
+    #     omega=cfg.omega,
+    #     alpha=cfg.alpha,
+    #     beta=cfg.beta,
+    #     initial_volatility=cfg.initial_volatility,
+    #     rng=rng,
+    # )
+    volatilities = np.full(n_periods, cfg.volatility * np.sqrt(dt), dtype=np.float64)
+
+    # prices = _generate_price_path(start_price, cfg.drift, dt, volatilities, rng)
+    # --- Standard GBM path ---
+    prices = np.empty(n_periods + 1, dtype=np.float64)
+    prices[0] = start_price
+    for t in range(1, n_periods + 1):
+        z = rng.standard_normal()
+        prices[t] = prices[t - 1] * np.exp(
+            (cfg.drift - 0.5 * cfg.volatility**2) * dt + cfg.volatility * np.sqrt(dt) * z
+        )
+
     opens = prices[:-1]
     closes = prices[1:]
     highs, lows = _synthesize_intraperiod_extremes(opens, closes, volatilities, rng)
@@ -177,6 +194,7 @@ def generate_mock_ohlcv(
 
 __all__ = [
     "GBMGARCHParams",
+    "GBMParams",
     "generate_mock_ohlcv",
 ]
 
