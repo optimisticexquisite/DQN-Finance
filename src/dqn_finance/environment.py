@@ -45,7 +45,7 @@ class MarketEnvironment:
 
     Notes
     -----
-    The returned state is a flattened vector containing ``lookback`` consecutive
+    The returned state is a flattened vector containing lookback consecutive
     OHLCV samples ordered from oldest to newest. Rewards follow the definition
     ``r_t = ((p_{t+t_w} - p_t) / p_t) * a_t``.
     """
@@ -67,6 +67,11 @@ class MarketEnvironment:
         self.stabilization_window = stabilization_window
 
         self._data = self._to_numpy(data)
+
+        # Calculate and store normalization stats
+        self._mean = np.mean(self._data, axis=0, dtype=np.float32)
+        self._std = np.std(self._data, axis=0, dtype=np.float32) + 1e-9 # Epsilon for safety
+
         if self._data.ndim != 2 or self._data.shape[0] <= self.lookback:
             raise ValueError("Input data must be a 2D array with more rows than the lookback period")
 
@@ -127,11 +132,17 @@ class MarketEnvironment:
 
     def _build_state(self, index: int) -> np.ndarray:
         window = self._data[index - self.lookback + 1 : index + 1]
-        return np.array(window.reshape(-1), dtype=np.float32, copy=True)
+        # Apply normalization
+        normalized_window = (window - self._mean) / self._std
+        # Return the flattened normalized window
+        return np.array(normalized_window.reshape(-1), dtype=np.float32, copy=True)
 
     def _compute_reward(self, index: int, action: float) -> float:
         current_price = float(self._prices[index])
         future_price = float(self._prices[index + self.stabilization_window])
+        # Safeguard against any nan/inf prices
+        if not np.isfinite(current_price) or not np.isfinite(future_price):
+            return 0.0
         if current_price == 0:
             return 0.0
         return ((future_price - current_price) / current_price) * float(action)
@@ -151,7 +162,7 @@ class MarketEnvironment:
         else:
             next_state = self._build_state(self._cursor)
 
-        return EnvironmentStep(next_state=next_state, reward=reward, done=self._done)
+        return EnvironmentStep(next_state = next_state, reward = reward, done = self._done)
 
     @property
     def done(self) -> bool:
