@@ -57,6 +57,8 @@ class MarketEnvironment:
         stabilization_window: int,
         *,
         price_column: Union[str, int] = "close",
+        normalization_mean: Optional[np.ndarray] = None,
+        normalization_std: Optional[np.ndarray] = None,
     ) -> None:
         if lookback <= 0:
             raise ValueError("Lookback period must be positive")
@@ -68,9 +70,20 @@ class MarketEnvironment:
 
         self._data = self._to_numpy(data)
 
-        # Calculate and store normalization stats
-        self._mean = np.mean(self._data, axis=0, dtype=np.float32)
-        self._std = np.std(self._data, axis=0, dtype=np.float32) + 1e-9 # Epsilon for safety
+        if (normalization_mean is None) != (normalization_std is None):
+            raise ValueError("Provide both normalization_mean and normalization_std or neither.")
+
+        if normalization_mean is None:
+            self._mean = np.mean(self._data, axis=0, dtype=np.float32)
+            self._std = np.std(self._data, axis=0, dtype=np.float32)
+        else:
+            self._mean = np.asarray(normalization_mean, dtype=np.float32)
+            self._std = np.asarray(normalization_std, dtype=np.float32)
+
+        if self._std.shape != (self._data.shape[1],) or self._mean.shape != (self._data.shape[1],):
+            raise ValueError("Normalization statistics must match the number of features in data.")
+
+        self._std = np.where(self._std <= 0.0, 1e-9, self._std + 1e-9)  # Stabilize divisions
 
         if self._data.ndim != 2 or self._data.shape[0] <= self.lookback:
             raise ValueError("Input data must be a 2D array with more rows than the lookback period")
@@ -187,5 +200,13 @@ class MarketEnvironment:
     @property
     def action_window(self) -> int:
         return self.stabilization_window
+
+    @property
+    def normalization_mean(self) -> np.ndarray:
+        return self._mean.copy()
+
+    @property
+    def normalization_std(self) -> np.ndarray:
+        return self._std.copy()
 
 

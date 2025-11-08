@@ -4,7 +4,7 @@ from __future__ import annotations
 from tqdm import tqdm
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -184,6 +184,58 @@ class DQNAgent:
             "epsilon": float(self._epsilon),
         }
 
+    def evaluate_epoch(self, environment: MarketEnvironment) -> Dict[str, float]:
+        """Run a greedy rollout over the environment without updating parameters.
+
+        Returns
+        -------
+        Dict[str, float]
+            Dictionary containing the mean-squared temporal-difference error,
+            average realized reward and number of steps traversed.
+        """
+
+        if environment.lookback_period != self.config.lookback:
+            raise ValueError("Environment lookback period does not match agent configuration")
+        if environment.action_window != self.config.time_window:
+            raise ValueError("Environment action window does not match agent configuration")
+
+        state = environment.reset()
+        stabilization_counter = 0
+        cached_action_idx = 0
+        td_errors: List[float] = []
+        rewards: List[float] = []
+
+        while not environment.done:
+            if stabilization_counter == 0:
+                action_value = self.select_action(state, epsilon=0.0)
+                cached_action_idx = self._action_to_index[action_value]
+                stabilization_counter = self.config.time_window
+            else:
+                action_value = self.action_space[cached_action_idx]
+
+            step_result = environment.step(action_value)
+
+            with torch.no_grad():
+                state_tensor = self._to_tensor(state).unsqueeze(0)
+                q_sa = self.policy_net(state_tensor)[0, cached_action_idx].item()
+                if step_result.done:
+                    target = step_result.reward
+                else:
+                    next_tensor = self._to_tensor(step_result.next_state).unsqueeze(0)
+                    next_max = self.target_net(next_tensor).max(1).values.item()
+                    target = step_result.reward + self.config.discount_factor * next_max
+                td_errors.append(float((q_sa - target) ** 2))
+
+            rewards.append(step_result.reward)
+            state = step_result.next_state
+            stabilization_counter = max(stabilization_counter - 1, 0)
+
+        return {
+            "mse": float(np.mean(td_errors)) if td_errors else 0.0,
+            "avg_reward": float(np.mean(rewards)) if rewards else 0.0,
+            "steps": float(len(rewards)),
+        }
+
     def fit(self, environment: MarketEnvironment, epochs: int) -> List[Dict[str, float]]:
         """Train the agent for a number of epochs over the environment."""
 
@@ -200,6 +252,51 @@ def build_default_action_space() -> Tuple[float, float, float]:
 
 
 DEFAULT_AGENT_PRESETS: Dict[str, AgentConfig] = {
+    "1D": AgentConfig(
+        layer_sizes=(256, 128, 3),
+        activations=("Tanh", "Tanh", "Linear"),
+        learning_rate=1e-4,
+        replay_memory_size=50_000,
+        discount_factor=0.6,
+        epsilon_start=1.0,
+        epsilon_decay=0.995,
+        epsilon_min=0.05,
+        lookback=120,
+        time_window=5,
+        target_update_interval=750,
+        batch_size=64,
+        warmup_steps=1_500,
+    ),
+    "3D": AgentConfig(
+        layer_sizes=(256, 128, 3),
+        activations=("Tanh", "Tanh", "Linear"),
+        learning_rate=1e-4,
+        replay_memory_size=40_000,
+        discount_factor=0.6,
+        epsilon_start=1.0,
+        epsilon_decay=0.996,
+        epsilon_min=0.05,
+        lookback=60,
+        time_window=3,
+        target_update_interval=600,
+        batch_size=64,
+        warmup_steps=1_200,
+    ),
+    "12D": AgentConfig(
+        layer_sizes=(256, 128, 3),
+        activations=("Tanh", "Tanh", "Linear"),
+        learning_rate=1e-4,
+        replay_memory_size=30_000,
+        discount_factor=0.55,
+        epsilon_start=1.0,
+        epsilon_decay=0.997,
+        epsilon_min=0.05,
+        lookback=30,
+        time_window=2,
+        target_update_interval=500,
+        batch_size=64,
+        warmup_steps=900,
+    ),
     "H1": AgentConfig(
         layer_sizes=(300, 150, 3),
         activations=("Tanh", "Tanh", "Linear"),
