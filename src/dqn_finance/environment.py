@@ -145,9 +145,7 @@ class MarketEnvironment:
 
     def _build_state(self, index: int) -> np.ndarray:
         window = self._data[index - self.lookback + 1 : index + 1]
-        # Apply normalization
         normalized_window = (window - self._mean) / self._std
-        # Return the flattened normalized window
         return np.array(normalized_window.reshape(-1), dtype=np.float32, copy=True)
 
     def _compute_reward(self, index: int, action: float) -> float:
@@ -208,5 +206,4 @@ class MarketEnvironment:
     @property
     def normalization_std(self) -> np.ndarray:
         return self._std.copy()
-
 

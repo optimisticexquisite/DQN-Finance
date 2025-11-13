@@ -67,7 +67,7 @@ def compute_action_series(
     while not env.done:
         current_index = env.current_index
         if stabilization_counter == 0:
-            action_value = agent.select_action(state, epsilon=0.0)
+            action_value = agent.select_action(state, deterministic=True)
             cached_action_idx = agent._action_to_index[action_value]
             stabilization_counter = agent.config.time_window
         else:
@@ -257,4 +257,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
