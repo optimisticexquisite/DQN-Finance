@@ -17,5 +17,5 @@ def to_model_tensor(df: pd.DataFrame, lookback: int = 128):
     for i in range(N - lookback):
         window = data[i : i + lookback]
         sequences.append(window)
-    arr = np.stack(sequences)  # shape = (B, lookback, F)
+    arr = np.stack(sequences)
     return torch.tensor(arr, dtype=torch.float32)

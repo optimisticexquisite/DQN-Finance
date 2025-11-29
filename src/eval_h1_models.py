@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 import torch
-
+from features import prepare_features, to_model_tensor
 from dqn_finance import create_agent
 from dqn_finance.agent import DEFAULT_AGENT_PRESETS
 from main import (

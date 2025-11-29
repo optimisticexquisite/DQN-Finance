@@ -10,7 +10,7 @@ import torch
 
 from dqn_finance.agent import DQNAgent
 from dqn_finance.environment import MarketEnvironment
-
+from features import prepare_features, to_model_tensor
 from main import (
     AGENT_SPECS,
     FEATURE_COLUMNS,
