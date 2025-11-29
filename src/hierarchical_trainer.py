@@ -10,7 +10,9 @@ import torch
 
 from dqn_finance.agent import DQNAgent
 from dqn_finance.environment import MarketEnvironment
-from features import prepare_features, to_model_tensor
+from features.prepare_features import prepare_features
+from features.to_tensor import to_model_tensor
+
 from main import (
     AGENT_SPECS,
     FEATURE_COLUMNS,
@@ -127,10 +129,14 @@ def train_individual_agents(base_data: pd.DataFrame) -> Dict[str, Dict[str, obje
             f"(aggregation span={spec['aggregation']} days) ==="
         )
         aggregated = aggregate_ohlcv(base_data, spec["aggregation"])
+        features_df = prepare_features(aggregated)
+        feature_cols = [c for c in features_df.columns if c != "timestamp"]
+
         result = train_agent_on_dataframe(
             agent_name,
+            features_df,
             aggregated,
-            feature_columns=FEATURE_COLUMNS,
+            feature_columns=feature_cols,
             log_prefix=f"{agent_name}-IND",
             log_metrics=True,
         )
@@ -163,19 +169,22 @@ def train_hierarchical_agents(
 
     # Stage 2: 3D agent conditioned on previous 12D action
     aggregated_3d = aggregate_ohlcv(base_data, AGENT_SPECS["3D"]["aggregation"])
-    aggregated_3d = merge_feature_by_timestamp(
-        aggregated_3d,
+    features_3d = prepare_features(aggregated_3d)
+
+    features_3d = merge_feature_by_timestamp(
+        features_3d,
         aggregated_12d,
         "prev_action_12d",
         "prev_action_12d",
         default_value=0.0,
     )
-    feature_columns_3d = list(FEATURE_COLUMNS) + ["prev_action_12d"]
+
+    feature_columns_3d = [c for c in features_3d.columns if c != "timestamp"]
 
     print("\n=== Training hierarchical 3D agent (with 12D context) ===")
     result_3d = train_agent_on_dataframe(
         "3D",
-        aggregated_3d,
+        features_3d,
         feature_columns=feature_columns_3d,
         log_prefix="3D-HIER",
         log_metrics=True,

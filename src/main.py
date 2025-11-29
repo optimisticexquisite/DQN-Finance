@@ -13,7 +13,7 @@ import pandas as pd
 import torch
 
 from dqn_finance import DEFAULT_AGENT_PRESETS, DQNAgent, MarketEnvironment, create_agent
-from features import prepare_features, to_model_tensor
+from features.prepare_features import prepare_features
 
 FEATURE_COLUMNS: Tuple[str, ...] = ("open", "high", "low", "close", "volume")
 AGENT_SPECS: Dict[str, Dict[str, int]] = {
@@ -442,19 +442,21 @@ def train_agent_for_view(
     plot_dir: Path | None = None,
     checkpoint_dir: Path | None = None,
 ) -> Dict[str, object]:
-    # print(len(base_data))
-    aggregated_data = aggregate_ohlcv(base_data, aggregation_span)
-    # print(len(aggregated_data))
+    # 1. Aggregate OHLCV into H1 / 12D candles etc.
+    aggregated = aggregate_ohlcv(base_data, aggregation_span)
+    # 2. Generate all technical indicators
+    features = prepare_features(aggregated)
+    # 3. Use all numeric features except timestamp
+    feature_cols = [c for c in features.columns if c != "timestamp"]
     return train_agent_on_dataframe(
         agent_name,
-        aggregated_data,
-        feature_columns=FEATURE_COLUMNS,
+        features,
+        feature_columns=feature_cols,
         log_prefix=agent_name,
         log_metrics=True,
         plot_dir=plot_dir,
         checkpoint_dir=checkpoint_dir,
     )
-
 
 def main() -> None:
     torch.manual_seed(42)
