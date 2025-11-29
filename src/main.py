@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 
 from dqn_finance import DEFAULT_AGENT_PRESETS, DQNAgent, MarketEnvironment, create_agent
+from features import prepare_features, to_model_tensor
 
 FEATURE_COLUMNS: Tuple[str, ...] = ("open", "high", "low", "close", "volume")
 AGENT_SPECS: Dict[str, Dict[str, int]] = {
