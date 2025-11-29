@@ -201,23 +201,23 @@ def train_hierarchical_agents(
     aggregated_3d = add_prev_action_column(aggregated_3d, actions_3d, "prev_action_3d")
 
     # Stage 3: 1D agent conditioned on previous 3D and 12D actions
+    daily_data = prepare_features(base_data)
+
     daily_data = merge_feature_by_timestamp(
-        base_data,
+        daily_data,
         aggregated_12d,
         "prev_action_12d",
         "prev_action_12d",
-        default_value=0.0,
     )
+
     daily_data = merge_feature_by_timestamp(
         daily_data,
         aggregated_3d,
         "prev_action_3d",
         "prev_action_3d",
-        default_value=0.0,
     )
 
-    feature_columns_1d = list(FEATURE_COLUMNS) + ["prev_action_3d", "prev_action_12d"]
-
+    feature_columns_1d = [c for c in daily_data.columns if c != "timestamp"]
     print("\n=== Training hierarchical 1D agent (with 3D & 12D context) ===")
     result_1d = train_agent_on_dataframe(
         "1D",
