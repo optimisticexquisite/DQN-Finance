@@ -26,62 +26,64 @@ _ACTIVATION_MAP = {
 
 
 class QNetwork(nn.Module):
-    """Encoder-only Transformer that maps a stack of vectors to a stack of vectors.
+    """
+    Encoder-only Transformer that reads a stack of vectors (tokens),
+    applies positional embeddings, and then applies an MLP to the
+    **last token's** output to produce a final vector output.
 
-    Expected input shape: (batch_size, seq_len, input_dim)
-    Output shape:        (batch_size, seq_len, input_dim)
+    Input:  (B, T, input_dim)
+    Output: (B, mlp_output_dim)
     """
 
     def __init__(
         self,
         input_dim: int,
         max_seq_len: int,
+
+        # transformer hyperparameters
         d_model: Optional[int] = None,
         num_layers: int = 4,
         nhead: int = 8,
         dim_feedforward: int = 256,
-        dropout: float = 0.1,
-        activation: str = "relu",  # 'relu' or 'gelu' etc. (PyTorch-supported)
+        dropout: float = 0.0,
+        activation: str = "gelu",
+
+        # MLP head hyperparameters
+        mlp_layer_sizes: Sequence[int] = (128, 64),
+        mlp_activations: Sequence[str] = ("gelu", "gelu"),
+        output_dim: int = None,  # final output dim
         layer_norm_eps: float = 1e-5,
+
         batch_first: bool = True,
-    ) -> None:
+    ):
         super().__init__()
 
         if d_model is None:
             d_model = input_dim
-
         if d_model % nhead != 0:
-            raise ValueError(
-                f"d_model ({d_model}) must be divisible by nhead ({nhead})"
-            )
-
-        if num_layers <= 0:
-            raise ValueError("num_layers must be >= 1")
-
-        if max_seq_len <= 0:
-            raise ValueError("max_seq_len must be >= 1")
+            raise ValueError("d_model must be divisible by nhead")
+        if len(mlp_layer_sizes) != len(mlp_activations):
+            raise ValueError("MLP sizes and activations must match")
 
         self.input_dim = input_dim
         self.d_model = d_model
         self.max_seq_len = max_seq_len
         self.batch_first = batch_first
 
-        # Project input_dim -> d_model if needed (still "raw" vectors, no token embedding lookup)
+        # projection to model dim (if needed)
         if input_dim != d_model:
             self.input_proj = nn.Linear(input_dim, d_model)
-            self.output_proj = nn.Linear(d_model, input_dim)
         else:
             self.input_proj = nn.Identity()
-            self.output_proj = nn.Identity()
 
-        # Learnable positional embeddings
+        # learnable positional embedding
         self.pos_embedding = nn.Embedding(max_seq_len, d_model)
 
-        # Core Transformer encoder
+        # transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
-            dim_feedforward=dim_feedforward,  # MLP hidden size
+            dim_feedforward=dim_feedforward,
             dropout=dropout,
             activation=activation,
             batch_first=batch_first,
@@ -89,61 +91,56 @@ class QNetwork(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
-        # Optional: scale to stabilize (common for Transformers)
+        # scale factor common in Transformers
         self.scale = math.sqrt(d_model)
 
-    def forward(
-        self,
-        x: torch.Tensor,
-        src_key_padding_mask: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Args:
-            x: Tensor of shape (batch_size, seq_len, input_dim) if batch_first=True
-               or (seq_len, batch_size, input_dim) if batch_first=False.
-            src_key_padding_mask: Optional bool mask of shape
-                (batch_size, seq_len) indicating padding tokens to ignore.
+        # last-token MLP head
+        mlp_layers = []
+        in_dim = d_model
+        for hidden, act in zip(mlp_layer_sizes, mlp_activations):
+            mlp_layers.append(nn.Linear(in_dim, hidden))
+            activation_fn = activation_from_name(act)
+            if not isinstance(activation_fn, nn.Identity):
+                mlp_layers.append(activation_fn)
+            in_dim = hidden
 
-        Returns:
-            Tensor of same shape as x.
+        # final projection
+        if output_dim is None:
+            output_dim = mlp_layer_sizes[-1]
+        mlp_layers.append(nn.Linear(in_dim, output_dim))
+
+        self.mlp_head = nn.Sequential(*mlp_layers)
+
+    def forward(self, x: torch.Tensor, src_key_padding_mask=None) -> torch.Tensor:
+        """
+        Returns: (B, output_dim)
         """
         if self.batch_first:
-            batch_size, seq_len, in_dim = x.shape
+            B, T, D = x.shape
         else:
-            seq_len, batch_size, in_dim = x.shape
+            T, B, D = x.shape
 
-        if in_dim != self.input_dim:
-            raise ValueError(
-                f"Expected last dim {self.input_dim}, got {in_dim}"
-            )
+        if T > self.max_seq_len:
+            raise ValueError("Sequence too long")
 
-        if seq_len > self.max_seq_len:
-            raise ValueError(
-                f"Sequence length {seq_len} exceeds max_seq_len {self.max_seq_len}"
-            )
-
-        # Project to model dimension
+        # project to transformer model dim
         x = self.input_proj(x)
 
-        # Add positional embeddings
-        # positions: (seq_len,) -> broadcast appropriately
-        positions = torch.arange(
-            seq_len, device=x.device, dtype=torch.long
-        )  # [0, 1, ..., seq_len-1]
-
+        # add positional embeddings
+        positions = torch.arange(T, device=x.device)
         if self.batch_first:
-            # pos_emb: (1, seq_len, d_model) broadcast across batch
-            pos_emb = self.pos_embedding(positions).unsqueeze(0)
+            pos_emb = self.pos_embedding(positions).unsqueeze(0)  # (1, T, d_model)
         else:
-            # pos_emb: (seq_len, 1, d_model) broadcast across batch
-            pos_emb = self.pos_embedding(positions).unsqueeze(1)
+            pos_emb = self.pos_embedding(positions).unsqueeze(1)  # (T, 1, d_model)
 
         x = x * self.scale + pos_emb
 
-        # Transformer encoder
+        # transformer encoder forward
         x = self.encoder(x, src_key_padding_mask=src_key_padding_mask)
 
-        # Project back to input_dim (if necessary)
-        x = self.output_proj(x)
+        # take LAST TOKEN
+        last_token = x[:, -1, :] if self.batch_first else x[-1, :, :]
 
-        return x
+        # mlp head
+        out = self.mlp_head(last_token)  # (B, output_dim)
+        return out
