@@ -38,9 +38,11 @@ def _prepare_environments():
     aggregation = AGENT_SPECS["H1"]["aggregation"]
     aggregated = aggregate_ohlcv(base_data, aggregation)
 
+    features_df = prepare_features(aggregated)
+
     config = DEFAULT_AGENT_PRESETS["H1"]
     train_env, _, test_env = build_environment_splits(
-        aggregated,
+        features_df,         #  use feature-engineered data
         lookback=config.lookback,
         time_window=config.time_window,
         feature_columns=FEATURE_COLUMNS,
