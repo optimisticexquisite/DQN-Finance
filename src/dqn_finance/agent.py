@@ -19,8 +19,12 @@ from .network import QNetwork
 class AgentConfig:
     """Hyperparameter bundle for configuring a :class:`DQNAgent`."""
 
+    # --- MLP head configuration (final classifier on top of transformer) ---
+    # The last element of `layer_sizes` MUST equal the number of actions.
     layer_sizes: Sequence[int]
     activations: Sequence[str]
+
+    # --- Optimization / DQN / environment hyperparameters (unchanged) ---
     learning_rate: float
     replay_memory_size: int
     discount_factor: float
@@ -33,6 +37,16 @@ class AgentConfig:
     temperature_start: float = 1.0
     temperature_decay: float = 0.9995
     temperature_min: float = 0.05
+
+    # --- NEW: Transformer encoder hyperparameters ---
+    # These have sensible defaults so your existing presets keep working.
+    d_model: int = 64               # hidden size of transformer
+    nhead: int = 4                  # number of attention heads
+    num_encoder_layers: int = 2     # number of transformer layers
+    dim_feedforward: int = 128      # inner FFN size in each transformer layer
+    dropout: float = 0.1            # dropout inside transformer
+
+
 
 
 class DQNAgent:
@@ -54,7 +68,9 @@ class DQNAgent:
 
         self.config = config
         self.action_space = tuple(float(a) for a in action_space)
-        self._action_to_index: Dict[float, int] = {action: idx for idx, action in enumerate(self.action_space)}
+        self._action_to_index: Dict[float, int] = {
+            action: idx for idx, action in enumerate(self.action_space)
+        }
 
         if len(self._action_to_index) != len(self.action_space):
             raise ValueError("action_space must contain unique values")
@@ -66,8 +82,45 @@ class DQNAgent:
         resolved_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.device = torch.device(resolved_device)
 
-        self.policy_net = QNetwork(state_dim, config.layer_sizes, config.activations).to(self.device)
-        self.target_net = QNetwork(state_dim, config.layer_sizes, config.activations).to(self.device)
+        # --- NEW: infer sequence shape from flattened state_dim + lookback ---
+        # We assume the environment returns a flattened window of shape:
+        #   lookback * num_features
+        if state_dim % config.lookback != 0:
+            raise ValueError(
+                f"state_dim ({state_dim}) must be divisible by lookback ({config.lookback}) "
+                "for the transformer-based QNetwork. Check environment lookback/feature setup."
+            )
+
+        self._lookback = config.lookback
+        self._num_features = state_dim // config.lookback
+
+        # --- Build transformer-based Q-networks (policy + target) ---
+        self.policy_net = QNetwork(
+            input_dim=state_dim,
+            layer_sizes=config.layer_sizes,
+            activations=config.activations,
+            lookback=self._lookback,
+            num_features=self._num_features,
+            d_model=config.d_model,
+            nhead=config.nhead,
+            num_encoder_layers=config.num_encoder_layers,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+        ).to(self.device)
+
+        self.target_net = QNetwork(
+            input_dim=state_dim,
+            layer_sizes=config.layer_sizes,
+            activations=config.activations,
+            lookback=self._lookback,
+            num_features=self._num_features,
+            d_model=config.d_model,
+            nhead=config.nhead,
+            num_encoder_layers=config.num_encoder_layers,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+        ).to(self.device)
+
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
@@ -100,13 +153,14 @@ class DQNAgent:
         if deterministic:
             action_idx = int(torch.argmax(q_values).item())
         else:
-            temp = float(self._temperature if temperature is None else temperature)
-            temp = max(temp, 1e-6)
-            stabilized = (q_values - torch.max(q_values)) / temp
-            probabilities = torch.softmax(stabilized, dim=0).cpu().numpy()
-            probabilities = np.clip(probabilities, 1e-9, 1.0)
-            probabilities /= probabilities.sum()
-            action_idx = int(np.random.choice(len(self.action_space), p=probabilities))
+            # Use epsilon-greedy exploration where epsilon is temperature
+            if temperature is None:
+                temperature = self._temperature
+            # Randomly select an action with probability `temperature`
+            if np.random.rand() < temperature:
+                action_idx = np.random.randint(len(self.action_space))
+            else:
+                action_idx = int(torch.argmax(q_values).item())
 
         return self.action_space[action_idx]
 
