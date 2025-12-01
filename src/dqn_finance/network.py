@@ -11,6 +11,7 @@ from typing import Optional
 
 import torch
 from torch import nn
+
 _ACTIVATION_MAP = {
     "relu": nn.ReLU,
     "leakyrelu": nn.LeakyReLU,
@@ -138,9 +139,17 @@ class QNetwork(nn.Module):
         # transformer encoder forward
         x = self.encoder(x, src_key_padding_mask=src_key_padding_mask)
 
+<<<<<<< HEAD
         # take LAST TOKEN
         last_token = x[:, -1, :] if self.batch_first else x[-1, :, :]
 
         # mlp head
         out = self.mlp_head(last_token)  # (B, output_dim)
         return out
+=======
+        # Project back to input_dim (if necessary)
+        x = self.output_proj(x)
+        last_token = x[:, -1, :] if self.batch_first else x[-1, :, :]
+        out = self.mlp_head(last_token) 
+        return out
+>>>>>>> 10f141f (Q network changed to transformer)
