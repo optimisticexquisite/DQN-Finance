@@ -100,13 +100,14 @@ class DQNAgent:
         if deterministic:
             action_idx = int(torch.argmax(q_values).item())
         else:
-            temp = float(self._temperature if temperature is None else temperature)
-            temp = max(temp, 1e-6)
-            stabilized = (q_values - torch.max(q_values)) / temp
-            probabilities = torch.softmax(stabilized, dim=0).cpu().numpy()
-            probabilities = np.clip(probabilities, 1e-9, 1.0)
-            probabilities /= probabilities.sum()
-            action_idx = int(np.random.choice(len(self.action_space), p=probabilities))
+            # Use epsilon-greedy exploration where epsilon is temperature
+            if temperature is None:
+                temperature = self._temperature
+            # Randomly select an action with probability `temperature`
+            if np.random.rand() < temperature:
+                action_idx = np.random.randint(len(self.action_space))
+            else:
+                action_idx = int(torch.argmax(q_values).item())
 
         return self.action_space[action_idx]
 

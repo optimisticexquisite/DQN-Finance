@@ -14,12 +14,12 @@ import torch
 
 from dqn_finance import DEFAULT_AGENT_PRESETS, DQNAgent, MarketEnvironment, create_agent
 
-FEATURE_COLUMNS: Tuple[str, ...] = ("open", "high", "low", "close", "volume")
+FEATURE_COLUMNS: Tuple[str, ...] = ("open","low","high","close","volume","sentiment_core__prob_positive_1","sentiment_core__prob_negative_1","sentiment_core__prob_neutral_1","sentiment_core__compound_score_1","sentiment_core__sentiment_confidence_1","market_psychology__fud_index_1","market_psychology__fomo_index_1","market_psychology__hype_index_1","topic_category_confidence__topic_regulation_1","topic_category_confidence__topic_institutional_1","topic_category_confidence__topic_security_breach_1","topic_category_confidence__topic_fed_macro_1","entity_targeted_sentiment__sent_bitcoin_1","entity_targeted_sentiment__sent_exchanges_1","entity_targeted_sentiment__sent_regulators_1","metadata__clickbait_score_1","metadata__has_price_prediction_1","sentiment_core__prob_positive_2","sentiment_core__prob_negative_2","sentiment_core__prob_neutral_2","sentiment_core__compound_score_2","sentiment_core__sentiment_confidence_2","market_psychology__fud_index_2","market_psychology__fomo_index_2","market_psychology__hype_index_2","topic_category_confidence__topic_regulation_2","topic_category_confidence__topic_institutional_2","topic_category_confidence__topic_security_breach_2","topic_category_confidence__topic_fed_macro_2","entity_targeted_sentiment__sent_bitcoin_2","entity_targeted_sentiment__sent_exchanges_2","entity_targeted_sentiment__sent_regulators_2","metadata__clickbait_score_2","metadata__has_price_prediction_2")
 AGENT_SPECS: Dict[str, Dict[str, int]] = {
     # "1D": {"aggregation": 1, "epochs": 30},
     # "3D": {"aggregation": 3, "epochs": 60},
     # "12D": {"aggregation": 12, "epochs": 200},
-    "H1": {"aggregation": 12, "epochs": 200},
+    "H1": {"aggregation": 1, "epochs": 200},
 }
 
 INITIAL_BALANCE: float = 100.0
@@ -159,24 +159,18 @@ def load_nifty_ohlcv(csv_path: Path) -> pd.DataFrame:
     # Fast path: parse timestamp as datetime; enforce float32 on prices/volume
     df = pd.read_csv(
         csv_path,
-        parse_dates=["timestamp"],
-        dtype={
-            "open": "float32",
-            "high": "float32",
-            "low": "float32",
-            "close": "float32",
-            "volume": "float32",
-        },
+        parse_dates=["date_time"],
     )
 
     # Sanity: expected columns present
-    expected = ["timestamp", "open", "high", "low", "close", "volume"]
+    expected = ["date_time","open","low","high","close","volume","sentiment_core__prob_positive_1","sentiment_core__prob_negative_1","sentiment_core__prob_neutral_1","sentiment_core__compound_score_1","sentiment_core__sentiment_confidence_1","market_psychology__fud_index_1","market_psychology__fomo_index_1","market_psychology__hype_index_1","topic_category_confidence__topic_regulation_1","topic_category_confidence__topic_institutional_1","topic_category_confidence__topic_security_breach_1","topic_category_confidence__topic_fed_macro_1","entity_targeted_sentiment__sent_bitcoin_1","entity_targeted_sentiment__sent_exchanges_1","entity_targeted_sentiment__sent_regulators_1","metadata__clickbait_score_1","metadata__has_price_prediction_1","sentiment_core__prob_positive_2","sentiment_core__prob_negative_2","sentiment_core__prob_neutral_2","sentiment_core__compound_score_2","sentiment_core__sentiment_confidence_2","market_psychology__fud_index_2","market_psychology__fomo_index_2","market_psychology__hype_index_2","topic_category_confidence__topic_regulation_2","topic_category_confidence__topic_institutional_2","topic_category_confidence__topic_security_breach_2","topic_category_confidence__topic_fed_macro_2","entity_targeted_sentiment__sent_bitcoin_2","entity_targeted_sentiment__sent_exchanges_2","entity_targeted_sentiment__sent_regulators_2","metadata__clickbait_score_2","metadata__has_price_prediction_2"]
+
     missing = [c for c in expected if c not in df.columns]
     if missing:
         raise ValueError(f"CSV missing columns: {missing}")
 
     # Ensure no NaNs were introduced
-    bad_ts = int(df["timestamp"].isna().sum())
+    bad_ts = int(df["date_time"].isna().sum())
     bad_any = int(df[expected].isna().any(axis=1).sum())
     if bad_ts or bad_any:
         raise ValueError(
@@ -184,11 +178,12 @@ def load_nifty_ohlcv(csv_path: Path) -> pd.DataFrame:
         )
 
     # Sort chronologically and return canonical order
-    df = df.sort_values("timestamp").reset_index(drop=True)
+    df = df.sort_values("date_time").reset_index(drop=True)
     return df[expected]
 
 
 def aggregate_ohlcv(data: pd.DataFrame, span: int) -> pd.DataFrame:
+    
     if span <= 0:
         raise ValueError("Aggregation span must be positive")
     if span == 1:
@@ -454,12 +449,11 @@ def train_agent_for_view(
         checkpoint_dir=checkpoint_dir,
     )
 
-
 def main() -> None:
     torch.manual_seed(42)
     np.random.seed(42)
 
-    data_path = Path(__file__).resolve().parent / "data" / "SP_5min.csv"
+    data_path = Path(__file__).resolve().parent / "data" / "btc_hourly_with_sentiment.csv"
     nifty_data = load_nifty_ohlcv(data_path)
     # print(len(nifty_data))
 
