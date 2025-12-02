@@ -32,21 +32,18 @@ class MarketEnvironment:
     ----------
     data:
         Historical OHLCV samples ordered chronologically. Accepts a NumPy array
-        of shape ``(T, F)`` or a pandas DataFrame with at least five columns
-        corresponding to ``(open, high, low, close, volume)``.
+        of shape ``(T, F)`` or a pandas DataFrame.
     lookback:
         Number of past OHLCV samples constituting the state representation.
     stabilization_window:
         Time window ``t_w`` for action stabilization and reward computation.
     price_column:
-        Column name (for DataFrame input) or positional index (for array input)
-        pointing to the close price. Defaults to ``"close"`` for DataFrame
-        inputs and index ``3`` for arrays.
+        Column name or index pointing to the close price.
 
     Notes
     -----
     The returned state is a flattened vector containing lookback consecutive
-    OHLCV samples ordered from oldest to newest. Rewards follow the definition
+    OHLCV samples. Rewards follow the definition:
     ``r_t = ((p_{t+t_w} - p_t) / p_t) * a_t``.
     """
 
@@ -70,6 +67,7 @@ class MarketEnvironment:
 
         self._data = self._to_numpy(data)
 
+        # --- Normalization Setup ---
         if (normalization_mean is None) != (normalization_std is None):
             raise ValueError("Provide both normalization_mean and normalization_std or neither.")
 
@@ -83,7 +81,8 @@ class MarketEnvironment:
         if self._std.shape != (self._data.shape[1],) or self._mean.shape != (self._data.shape[1],):
             raise ValueError("Normalization statistics must match the number of features in data.")
 
-        self._std = np.where(self._std <= 0.0, 1e-9, self._std + 1e-9)  # Stabilize divisions
+        # Stabilize divisions by adding epsilon where std is effectively zero
+        self._std = np.where(self._std <= 1e-8, 1.0, self._std)
 
         if self._data.ndim != 2 or self._data.shape[0] <= self.lookback:
             raise ValueError("Input data must be a 2D array with more rows than the lookback period")
@@ -96,11 +95,12 @@ class MarketEnvironment:
             raise ValueError("Resolved price column index is out of bounds for the provided data")
         self._prices = self._data[:, self._price_column]
 
+        # Calculate the last index we can actually START a step at.
+        # We need enough future data for the stabilization_window reward lookahead.
         self._max_index = self._data.shape[0] - self.stabilization_window - 1
+        
         if self._max_index < self.lookback - 1:
             raise ValueError("Dataset is too short for the requested lookback and stabilization window")
-
-        self._terminal_state = np.zeros(self.state_size, dtype=np.float32)
 
         self._cursor = self.lookback - 1
         self._done = False
@@ -120,10 +120,10 @@ class MarketEnvironment:
         if isinstance(data, np.ndarray):
             if isinstance(price_column, int):
                 return price_column
-            # Default to the fourth column (close price) when names are unavailable.
+            # Default to index 3 (usually close) if column names aren't available
             return 3
 
-        if pd is None or not isinstance(data, pd.DataFrame):  # pragma: no cover - defensive branch
+        if pd is None or not isinstance(data, pd.DataFrame):
             raise TypeError("Pandas DataFrame required to resolve price column by name")
 
         if isinstance(price_column, str):
@@ -138,42 +138,63 @@ class MarketEnvironment:
 
     def reset(self) -> np.ndarray:
         """Reset the environment to its initial sliding window state."""
-
         self._cursor = self.lookback - 1
         self._done = False
         return self._build_state(self._cursor)
 
     def _build_state(self, index: int) -> np.ndarray:
-        window = self._data[index - self.lookback + 1 : index + 1]
+        """Construct the flattened, normalized state vector ending at `index`."""
+        # Slicing is [start:end], so we go from (index - lookback + 1) to (index + 1)
+        start_idx = index - self.lookback + 1
+        end_idx = index + 1
+        
+        window = self._data[start_idx : end_idx]
         normalized_window = (window - self._mean) / self._std
+        
+        # Flatten to (L * F,)
         return np.array(normalized_window.reshape(-1), dtype=np.float32, copy=True)
 
     def _compute_reward(self, index: int, action: float) -> float:
+        """Calculate reward based on future price movement (Oracle style)."""
         current_price = float(self._prices[index])
         future_price = float(self._prices[index + self.stabilization_window])
+
         # Safeguard against any nan/inf prices
         if not np.isfinite(current_price) or not np.isfinite(future_price):
             return 0.0
         if current_price == 0:
             return 0.0
+        
+        # Percentage change * action direction
         return ((future_price - current_price) / current_price) * float(action)
 
     def step(self, action: float) -> EnvironmentStep:
         """Advance the environment by one time step."""
-
         if self._done:
             raise RuntimeError("Environment is done; call reset() before stepping again")
 
+        # 1. Calculate reward based on the CURRENT cursor position before moving
         reward = self._compute_reward(self._cursor, action)
 
+        # 2. Advance the cursor
         self._cursor += 1
+
+        # 3. Check for termination
         if self._cursor > self._max_index:
             self._done = True
-            next_state = self._terminal_state.copy()
+            
+            # FIX: Do NOT return a zero vector. 
+            # Return the last valid state (the one we just stepped past).
+            # In standard DQN, this 'next_state' will be masked out by the 'done' flag
+            # during optimization anyway, but keeping it as a valid distribution 
+            # prevents network anomalies during evaluation passes or buffer sampling.
+            safe_index = self._max_index
+            next_state = self._build_state(safe_index)
         else:
+            # Normal step
             next_state = self._build_state(self._cursor)
 
-        return EnvironmentStep(next_state = next_state, reward = reward, done = self._done)
+        return EnvironmentStep(next_state=next_state, reward=reward, done=self._done)
 
     @property
     def done(self) -> bool:
@@ -206,4 +227,3 @@ class MarketEnvironment:
     @property
     def normalization_std(self) -> np.ndarray:
         return self._std.copy()
-

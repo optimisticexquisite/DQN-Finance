@@ -40,10 +40,10 @@ class AgentConfig:
 
     # --- NEW: Transformer encoder hyperparameters ---
     # These have sensible defaults so your existing presets keep working.
-    d_model: int = 64               # hidden size of transformer
-    nhead: int = 4                  # number of attention heads
-    num_encoder_layers: int = 2     # number of transformer layers
-    dim_feedforward: int = 128      # inner FFN size in each transformer layer
+    d_model: int = 128        # hidden size of transformer
+    nhead: int = 4               # number of attention heads
+    num_encoder_layers: int = 4     # number of transformer layers
+    dim_feedforward: int = 64    # inner FFN size in each transformer layer
     dropout: float = 0.1            # dropout inside transformer
 
 
@@ -141,7 +141,7 @@ class DQNAgent:
         self,
         state: np.ndarray,
         *,
-        deterministic: bool = False,
+        deterministic: bool = True,
         temperature: Optional[float] = None,
     ) -> float:
         """Sample an action according to the softmax distribution over Q-values."""
@@ -317,7 +317,8 @@ class DQNAgent:
             ``track_rewards`` is ``True``, the per-step rewards are included
             under the ``"rewards"`` key. When ``track_actions`` is ``True``,
             the greedy actions taken at each step are returned under the
-            ``"actions"`` key.
+            ``"actions"`` key, and per-step action probabilities are included
+            under the ``"probs"`` key.
         """
 
         if environment.lookback_period != self.config.lookback:
@@ -331,9 +332,20 @@ class DQNAgent:
         td_errors: List[float] = []
         rewards: List[float] = []
         actions: List[float] = [] if track_actions else []
+        probs: List[List[float]] = [] if track_actions else []
 
         while not environment.done:
+            # Compute Q-values and probabilities for the current state
+            state_tensor = self._to_tensor(state).unsqueeze(0)
+            with torch.no_grad():
+                q_values = self.policy_net(state_tensor).squeeze(0)
+                if track_actions:
+                    prob_vec = torch.softmax(q_values, dim=-1).cpu().numpy().tolist()
+                    probs.append(prob_vec)
+
+            # Action selection with stabilization window
             if stabilization_counter == 0:
+                # Keep behaviour consistent with previous code (stochastic eval)
                 action_value = self.select_action(state, deterministic=False)
                 cached_action_idx = self._action_to_index[action_value]
                 stabilization_counter = self.config.time_window
@@ -342,9 +354,9 @@ class DQNAgent:
 
             step_result = environment.step(action_value)
 
+            # TD error computation
             with torch.no_grad():
-                state_tensor = self._to_tensor(state).unsqueeze(0)
-                q_sa = self.policy_net(state_tensor)[0, cached_action_idx].item()
+                q_sa = q_values[cached_action_idx].item()
                 if step_result.done:
                     target = step_result.reward
                 else:
@@ -356,6 +368,7 @@ class DQNAgent:
             rewards.append(step_result.reward)
             if track_actions:
                 actions.append(float(action_value))
+
             state = step_result.next_state
             stabilization_counter = max(stabilization_counter - 1, 0)
 
@@ -370,7 +383,9 @@ class DQNAgent:
             result["rewards"] = list(rewards)
         if track_actions:
             result["actions"] = list(actions)
+            result["probs"] = [list(p) for p in probs]
         return result
+
 
     def fit(self, environment: MarketEnvironment, epochs: int) -> List[Dict[str, float]]:
         """Train the agent for a number of epochs over the environment."""
@@ -437,9 +452,9 @@ DEFAULT_AGENT_PRESETS: Dict[str, AgentConfig] = {
         layer_sizes=(200, 100, 3),
         activations=("tanh", "tanh", "Linear"),
         learning_rate=1e-4,
-        replay_memory_size = 800,
+        replay_memory_size = 1024,
         discount_factor=0.45,
-        lookback=200,
+        lookback=256,
         time_window=5,
         target_update_interval=400,
         batch_size=64,

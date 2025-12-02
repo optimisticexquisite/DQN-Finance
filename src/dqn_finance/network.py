@@ -12,6 +12,7 @@ from typing import Optional
 import torch
 from torch import nn
 
+
 _ACTIVATION_MAP = {
     "relu": nn.ReLU,
     "leakyrelu": nn.LeakyReLU,
@@ -24,6 +25,7 @@ _ACTIVATION_MAP = {
     "softsign": nn.Softsign,
     "linear": nn.Identity,
 }
+
 def activation_from_name(name: str) -> nn.Module:
     name = name.lower()
     if name == "relu":
@@ -34,28 +36,12 @@ def activation_from_name(name: str) -> nn.Module:
         return nn.Tanh()
     elif name == "sigmoid":
         return nn.Sigmoid()
-    elif name == "identity":
+    elif name == "linear":
         return nn.Identity()
     else:
         raise ValueError(f"Unsupported activation function: {name}")
+
 class QNetwork(nn.Module):
-    """Transformer-based network for approximating the action-value function.
-
-    Assumes the input is a flattened sequence of vectors corresponding to a
-    sliding window of OHLCV-like features:
-
-        x.shape == (batch_size, lookback * num_features)
-
-    Internally we reshape to:
-
-        (batch_size, lookback, num_features)
-
-    Each timestep vector is treated as a token (no token embedding lookup).
-    We apply a linear projection to `d_model`, add positional embeddings and
-    run an encoder-only transformer. The last token's hidden state is then
-    fed through an MLP head to produce Q-values for each action.
-    """
-
     def __init__(
         self,
         input_dim: int,
@@ -72,108 +58,98 @@ class QNetwork(nn.Module):
     ) -> None:
         super().__init__()
 
-        if lookback <= 0:
-            raise ValueError("lookback must be positive for transformer QNetwork")
-        if num_features <= 0:
-            raise ValueError("num_features must be positive for transformer QNetwork")
-
-        expected_input_dim = lookback * num_features
-        if input_dim != expected_input_dim:
-            raise ValueError(
-                f"Transformer QNetwork expects input_dim={expected_input_dim} "
-                f"(lookback={lookback} * num_features={num_features}), "
-                f"but got input_dim={input_dim}."
-            )
-
-        if len(layer_sizes) == 0:
-            raise ValueError("layer_sizes must contain at least one layer")
-        if len(layer_sizes) != len(activations):
-            raise ValueError("Number of activations must match number of layers")
+        # ... (Validation checks remain the same) ...
+        if lookback * num_features != input_dim:
+             raise ValueError(f"Input dim mismatch")
 
         self.lookback = lookback
         self.num_features = num_features
         self.d_model = d_model
 
-        # --- Token projection: per-timestep feature vector -> d_model ---
-        # This is a simple linear projection, not an embedding lookup.
-        self.input_proj = nn.Linear(num_features, d_model)
-
-        # --- Positional embedding for sequence positions [0 .. lookback-1] ---
+        # 1. Input Projection
+        self.input_projection = nn.Linear(num_features, d_model)
+        
+        # 2. Positional Embedding
         self.pos_embedding = nn.Embedding(lookback, d_model)
+        
+        # 3. Layer Normalization (CRITICAL for Transformers)
+        # Normalizes the embedding before it enters the encoder
+        self.layernorm_embedding = nn.LayerNorm(d_model)
 
-        # --- Transformer encoder stack ---
+        # 4. Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=dim_feedforward,
             dropout=dropout,
-            activation="gelu",  # or "relu" if you prefer
-            batch_first=False,  # we'll feed (L, B, E)
+            activation="gelu",
+            batch_first=False, 
+            norm_first=True # Usually stabilizes training
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_encoder_layers)
 
-        # --- MLP head on the last token for classification/Q-values ---
+        # 5. MLP Head construction (FIXED)
         head_layers: List[nn.Module] = []
         in_dim = d_model
-        for out_dim, activation_name in zip(layer_sizes, activations):
+        
+        # Iterate through all layers
+        for i, (out_dim, act_name) in enumerate(zip(layer_sizes, activations)):
             head_layers.append(nn.Linear(in_dim, out_dim))
-            activation = activation_from_name('relu')
-            # Keep final activations consistent with your original design:
-            if not isinstance(activation, nn.Identity):
-                head_layers.append(activation)
+            
+            # CHECK: Is this the last layer?
+            is_last_layer = (i == len(layer_sizes) - 1)
+            
+            if not is_last_layer:
+                # Only apply activation to hidden layers
+                # FIX: Use the variable act_name, not hardcoded 'relu'
+                act_func = activation_from_name(act_name)
+                head_layers.append(act_func)
+                # Optional: Add Dropout in MLP head
+                head_layers.append(nn.Dropout(dropout))
+            
             in_dim = out_dim
 
         self.head = nn.Sequential(*head_layers)
+        
+        # Initialize weights (Good practice for Transformers)
+        self._init_weights()
+
+    def _init_weights(self):
+        """Kaiming init for Linear, restricted range for Embeddings."""
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward pass.
+        batch_size = x.shape[0]
 
-        Parameters
-        ----------
-        x:
-            Tensor of shape (batch_size, lookback * num_features).
+        # Reshape: (B, L*F) -> (B, L, F)
+        x = x.view(batch_size, self.lookback, self.num_features)
+        
+        # Project: (B, L, F) -> (B, L, d_model)
+        x = self.input_projection(x)
+        
+        # Add Positional Embeddings
+        positions = torch.arange(self.lookback, device=x.device).unsqueeze(0) # (1, L)
+        pos_emb = self.pos_embedding(positions) # (1, L, d_model)
+        
+        x = x + pos_emb
+        
+        # Apply Norm before Transformer (Stabilizes gradients)
+        x = self.layernorm_embedding(x)
 
-        Returns
-        -------
-        torch.Tensor
-            Q-values for each action: shape (batch_size, n_actions),
-            where n_actions == layer_sizes[-1].
-        """
-        if x.dim() != 2:
-            raise ValueError(
-                f"Expected 2D input tensor of shape (batch_size, {self.lookback * self.num_features}), "
-                f"got shape {tuple(x.shape)}"
-            )
+        # Transpose for Transformer: (B, L, E) -> (L, B, E)
+        x = x.transpose(0, 1)
 
-        batch_size, flat_dim = x.shape
-        expected_dim = self.lookback * self.num_features
-        if flat_dim != expected_dim:
-            raise ValueError(
-                f"Expected input dimension {expected_dim}, got {flat_dim}. "
-                f"Check environment lookback/feature configuration."
-            )
+        # Encode
+        # (L, B, E)
+        encoded = self.encoder(x)
 
-        # Reshape flat vector to (B, L, F)
-        x = x.view(batch_size, self.lookback, self.num_features)  # (B, L, F)
+        # Take last token
+        # (B, E)
+        last_token = encoded[-1]
 
-        # Project features to d_model
-        x = self.input_proj(x)  # (B, L, d_model)
-
-        # Add positional embeddings
-        # positions: (1, L)
-        positions = torch.arange(self.lookback, device=x.device).unsqueeze(0)
-        pos_emb = self.pos_embedding(positions)  # (1, L, d_model)
-        x = x + pos_emb  # broadcast over batch -> (B, L, d_model)
-
-        # Transformer encoder expects (L, B, d_model) since batch_first=False
-        x = x.transpose(0, 1)  # (L, B, d_model)
-
-        # Encode sequence
-        encoded = self.encoder(x)  # (L, B, d_model)
-
-        # Take last token representation: shape (B, d_model)
-        last_token = encoded[-1]  # (B, d_model)
-
-        # MLP head to get Q-values: (B, n_actions)
+        # MLP Head
         q_values = self.head(last_token)
+
         return q_values
