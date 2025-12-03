@@ -5,7 +5,8 @@ import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 
 CSV_PATH = "data/btc_hourly_with_sentiment.csv"
-N = 43923   # number of rows to plot
+N1 = 43923   # First row
+N2 = N1 + 9412   # Last row (exclusive)
 
 
 def plot_candlestick(ax, dates, open_, high_, low_, close_):
@@ -39,7 +40,9 @@ def plot_candlestick(ax, dates, open_, high_, low_, close_):
 
 
 def main():
-    df = pd.read_csv(CSV_PATH).head(N)
+    df = pd.read_csv(CSV_PATH)
+    df = df.iloc[N1:N2]
+
 
     # Parse datetime column
     df["date_time"] = pd.to_datetime(df["date_time"], utc=False)
@@ -65,7 +68,7 @@ def main():
     ax_volume.set_ylabel("Volume")
     ax_volume.grid(alpha=0.30)
 
-    ax_price.set_title(f"BTC Hourly OHLC — First {N} Candles")
+    ax_price.set_title(f"BTC Hourly OHLC — {N1} to {N2} Candles")
     fig.autofmt_xdate(rotation=45)
     plt.tight_layout()
     plt.savefig("btc_hourly_first_n_candles.png", dpi=300)

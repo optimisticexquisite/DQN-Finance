@@ -365,13 +365,44 @@ def train_agent_on_dataframe(
         if validation_plot_dir is not None:
             val_rewards = val_metrics.get("rewards")
             val_actions = val_metrics.get("actions")
+            val_probs = val_metrics.get("probs")
+
+            # --- NEW: save per-step probabilities to CSV (one file per epoch) ---
             if (
                 isinstance(val_rewards, list)
                 and isinstance(val_actions, list)
+                and isinstance(val_probs, list)
                 and val_rewards
-                and len(val_rewards) == len(val_actions)
+                and len(val_rewards) == len(val_actions) == len(val_probs)
             ):
-                balances = _balance_trajectory_from_rewards(val_rewards, initial_balance=INITIAL_BALANCE)
+                # Build a table: epoch, step, reward, action, prob_action_<value>...
+                action_space = list(agent.action_space)
+                prob_col_names = [f"prob_action_{a:g}" for a in action_space]
+
+                records: List[Dict[str, float]] = []
+                for step_idx, (reward, action, prob_vec) in enumerate(
+                    zip(val_rewards, val_actions, val_probs)
+                ):
+                    row: Dict[str, float] = {
+                        "epoch": float(epoch + 1),
+                        "step": float(step_idx),
+                        "reward": float(reward),
+                        "action": float(action),
+                    }
+                    for col_name, p in zip(prob_col_names, prob_vec):
+                        row[col_name] = float(p)
+                    records.append(row)
+
+                probs_df = pd.DataFrame.from_records(records)
+                csv_path = validation_plot_dir / f"epoch_{epoch + 1:02d}_validation_probs.csv"
+                probs_df.to_csv(csv_path, index=False)
+                print(f"[{agent_name}] saved validation probabilities to {csv_path}")
+
+                # --- Existing balance plot logic (unchanged, but now after CSV) ---
+                balances = _balance_trajectory_from_rewards(
+                    val_rewards,
+                    initial_balance=INITIAL_BALANCE,
+                )
                 plot_path = validation_plot_dir / f"epoch_{epoch + 1:02d}_validation_balance.png"
                 _plot_balance_with_actions(
                     balances,
@@ -379,6 +410,22 @@ def train_agent_on_dataframe(
                     plot_path,
                     title=f"{agent_name} Validation Balance (Epoch {epoch + 1})",
                 )
+            else:
+                # Fallback: if we don't have consistent rewards/actions/probs,
+                # keep the old behaviour (no plot / no CSV).
+                if isinstance(val_rewards, list) and isinstance(val_actions, list) and val_rewards and len(val_rewards) == len(val_actions):
+                    balances = _balance_trajectory_from_rewards(
+                        val_rewards,
+                        initial_balance=INITIAL_BALANCE,
+                    )
+                    plot_path = validation_plot_dir / f"epoch_{epoch + 1:02d}_validation_balance.png"
+                    _plot_balance_with_actions(
+                        balances,
+                        val_actions,
+                        plot_path,
+                        title=f"{agent_name} Validation Balance (Epoch {epoch + 1})",
+                    )
+
         val_avg_reward = val_metrics["avg_reward"]
         epoch_summary = {
             "train_loss": train_metrics["avg_loss"],

@@ -40,10 +40,10 @@ class AgentConfig:
 
     # --- NEW: Transformer encoder hyperparameters ---
     # These have sensible defaults so your existing presets keep working.
-    d_model: int = 128        # hidden size of transformer
-    nhead: int = 4               # number of attention heads
-    num_encoder_layers: int = 4     # number of transformer layers
-    dim_feedforward: int = 64    # inner FFN size in each transformer layer
+    d_model: int = 128   # hidden size of transformer
+    nhead: int = 4            # number of attention heads
+    num_encoder_layers: int = 4   # number of transformer layers
+    dim_feedforward: int = 128  # inner FFN size in each transformer layer
     dropout: float = 0.1            # dropout inside transformer
 
 
@@ -79,7 +79,7 @@ class DQNAgent:
             np.random.seed(seed)
             torch.manual_seed(seed)
 
-        resolved_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        resolved_device = device or ("cuda:3")
         self.device = torch.device(resolved_device)
 
         # --- NEW: infer sequence shape from flattened state_dim + lookback ---
@@ -141,7 +141,7 @@ class DQNAgent:
         self,
         state: np.ndarray,
         *,
-        deterministic: bool = True,
+        deterministic: bool = False,
         temperature: Optional[float] = None,
     ) -> float:
         """Sample an action according to the softmax distribution over Q-values."""
@@ -156,6 +156,7 @@ class DQNAgent:
             # Use epsilon-greedy exploration where epsilon is temperature
             if temperature is None:
                 temperature = self._temperature
+            # print("Temperature:", temperature)
             # Randomly select an action with probability `temperature`
             if np.random.rand() < temperature:
                 action_idx = np.random.randint(len(self.action_space))
@@ -346,7 +347,7 @@ class DQNAgent:
             # Action selection with stabilization window
             if stabilization_counter == 0:
                 # Keep behaviour consistent with previous code (stochastic eval)
-                action_value = self.select_action(state, deterministic=False)
+                action_value = self.select_action(state, deterministic=False, temperature=0.05)
                 cached_action_idx = self._action_to_index[action_value]
                 stabilization_counter = self.config.time_window
             else:
@@ -449,7 +450,7 @@ DEFAULT_AGENT_PRESETS: Dict[str, AgentConfig] = {
         temperature_min=0.05,
     ),
     "H1": AgentConfig(
-        layer_sizes=(200, 100, 3),
+        layer_sizes=(128, 64, 3),
         activations=("tanh", "tanh", "Linear"),
         learning_rate=1e-4,
         replay_memory_size = 1024,
